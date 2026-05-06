@@ -1,0 +1,10 @@
+numpy==2.0.2
+pandas==3.0.1
+torch==2.10.0+cu128
+datasets==4.7.0
+transformers==5.3.0
+openpyxl==3.1.5
+scipy==1.16.3
+scikit-learn==1.6.1
+accelerate==1.13.0
+safetensors==0.7.0
