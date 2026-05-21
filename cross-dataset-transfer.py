@@ -22,6 +22,25 @@ from transformers import (
 
 
 # =========================================================
+# Normalization helpers
+# =========================================================
+def normalize_scores(values, score_min, score_max):
+    values = np.asarray(values, dtype=float)
+    return (values - score_min) / (score_max - score_min)
+
+
+def denormalize_scores(values, score_min, score_max):
+    values = np.asarray(values, dtype=float)
+    return values * (score_max - score_min) + score_min
+
+
+def normalize_label_column(df, label_col, score_min, score_max):
+    df = df.copy()
+    df[label_col] = normalize_scores(df[label_col].astype(float), score_min, score_max)
+    return df
+
+
+# =========================================================
 # Metrics
 # =========================================================
 def snap_to_valid_scores(values, valid_scores):
@@ -32,11 +51,22 @@ def snap_to_valid_scores(values, valid_scores):
     return snapped, idx
 
 
-def make_compute_metrics(valid_scores=None):
+def make_compute_metrics(
+    valid_scores=None,
+    normalize_labels=False,
+    score_min=None,
+    score_max=None,
+):
     def compute_metrics(eval_pred):
         preds, labels = eval_pred
         preds = np.squeeze(preds).astype(float)
         labels = np.squeeze(labels).astype(float)
+
+        # Convert normalized predictions/labels back to raw score scale
+        # before calculating final metrics.
+        if normalize_labels:
+            preds = denormalize_scores(preds, score_min, score_max)
+            labels = denormalize_scores(labels, score_min, score_max)
 
         rmse = math.sqrt(mean_squared_error(labels, preds))
 
@@ -117,19 +147,6 @@ def build_dataset(df, tokenizer, text_col, label_col, max_length=512):
     ds.set_format(type="torch", columns=columns)
     return ds
 
-
-# =========================================================
-# Replace the regressor head
-# =========================================================
-def reset_bert_regression_head(model):
-    model.classifier = nn.Linear(model.config.hidden_size, 1)
-    model.classifier.weight.data.normal_(
-        mean=0.0, std=model.config.initializer_range
-    )
-    model.classifier.bias.data.zero_()
-    return model
-
-
 # =========================================================
 # Main few-shot transfer function
 # =========================================================
@@ -151,8 +168,17 @@ def run_few_shot_transfer(
     weight_decay=0.01,
     target_valid_scores=None,
     tokenizer_name=None,
+
+    # Normalization options
+    normalize_labels=False,
+    score_min=None,
+    score_max=None,
 ):
     set_seed(seed)
+
+    if normalize_labels:
+        if score_min is None or score_max is None:
+            raise ValueError("score_min and score_max must be provided when normalize_labels=True.")
 
     # 1) Load tokenizer
     try:
@@ -172,35 +198,48 @@ def run_few_shot_transfer(
         problem_type="regression",
     )
 
-    model = reset_bert_regression_head(model)
-
     # 3) Load target data
-    target_train_df = load_csv(target_train_csv, text_col, label_col)
-    target_dev_df = load_csv(target_dev_csv, text_col, label_col)
-    target_test_df = load_csv(target_test_csv, text_col, label_col)
+    target_train_df_raw = load_csv(target_train_csv, text_col, label_col)
+    target_dev_df_raw = load_csv(target_dev_csv, text_col, label_col)
+    target_test_df_raw = load_csv(target_test_csv, text_col, label_col)
 
-    # 4) Sample few-shot subset from target train
-    few_shot_df = sample_few_shot(
-        target_train_df,
+    # 4) Sample few-shot subset from target train on raw labels
+    few_shot_df_raw = sample_few_shot(
+        target_train_df_raw,
         label_col=label_col,
         n_shot=n_shot,
         seed=seed,
         stratify=True,
     )
 
-    print(f"\nFew-shot subset size: {len(few_shot_df)}")
+    print(f"\nFew-shot subset size: {len(few_shot_df_raw)}")
     print("Few-shot label distribution:")
-    print(few_shot_df[label_col].value_counts().sort_index())
+    print(few_shot_df_raw[label_col].value_counts().sort_index())
 
-    # 5) Convert to HF datasets
+    # 5) Normalize labels for training/evaluation if requested
+    if normalize_labels:
+        few_shot_df = normalize_label_column(few_shot_df_raw, label_col, score_min, score_max)
+        target_dev_df = normalize_label_column(target_dev_df_raw, label_col, score_min, score_max)
+        target_test_df = normalize_label_column(target_test_df_raw, label_col, score_min, score_max)
+    else:
+        few_shot_df = few_shot_df_raw
+        target_dev_df = target_dev_df_raw
+        target_test_df = target_test_df_raw
+
+    # 6) Convert to HF datasets
     train_ds = build_dataset(few_shot_df, tokenizer, text_col, label_col, max_length)
     dev_ds = build_dataset(target_dev_df, tokenizer, text_col, label_col, max_length)
     test_ds = build_dataset(target_test_df, tokenizer, text_col, label_col, max_length)
 
-    # 6) Metrics
-    compute_metrics = make_compute_metrics(valid_scores=target_valid_scores)
+    # 7) Metrics
+    compute_metrics = make_compute_metrics(
+        valid_scores=target_valid_scores,
+        normalize_labels=normalize_labels,
+        score_min=score_min,
+        score_max=score_max,
+    )
 
-    # 7) Training arguments
+    # 8) Training arguments
     metric_for_best_model = "rmse"
     greater_is_better = False
 
@@ -227,25 +266,25 @@ def run_few_shot_transfer(
         disable_tqdm=True,
     )
 
-    class ModernSaveTrainer(Trainer):  # For loading BERT in the modern format with weight and bias instead of gamma and beta
-        def _save(self, output_dir=None, state_dict=None):
-            output_dir = output_dir if output_dir is not None else self.args.output_dir
-            os.makedirs(output_dir, exist_ok=True)
+    class ModernSaveTrainer(Trainer): #For loading BERT in the modern format with weight and bias instead of gamma and beta
+      def _save(self, output_dir=None, state_dict=None):
+          output_dir = output_dir if output_dir is not None else self.args.output_dir
+          os.makedirs(output_dir, exist_ok=True)
 
-            model_to_save = self.model
-            if hasattr(self, "accelerator"):
-                model_to_save = self.accelerator.unwrap_model(self.model)
+          model_to_save = self.model
+          if hasattr(self, "accelerator"):
+              model_to_save = self.accelerator.unwrap_model(self.model)
 
-            model_to_save.save_pretrained(
-                output_dir,
-                state_dict=state_dict,
-                save_original_format=False,
-            )
+          model_to_save.save_pretrained(
+              output_dir,
+              state_dict=state_dict,
+              save_original_format=False,
+          )
 
-            if self.processing_class is not None:
-                self.processing_class.save_pretrained(output_dir)
+          if self.processing_class is not None:
+              self.processing_class.save_pretrained(output_dir)
 
-    # 8) Trainer
+    # 9) Trainer
     trainer = ModernSaveTrainer(
         model=model,
         args=training_args,
@@ -256,33 +295,32 @@ def run_few_shot_transfer(
         compute_metrics=compute_metrics,
     )
 
-    # 9) Fine-tune on few-shot target subset
+    # 10) Fine-tune on few-shot target subset
     trainer.train()
 
-    # 10) Evaluate on target dev and target test
+    # 11) Evaluate on target dev and target test
     dev_metrics = trainer.evaluate(dev_ds, metric_key_prefix="dev")
     test_metrics = trainer.evaluate(test_ds, metric_key_prefix="test")
 
-    pred_output = trainer.predict(test_ds)
-    preds = np.squeeze(pred_output.predictions).astype(float)
-    labels = np.squeeze(pred_output.label_ids).astype(float)
-
-    # Save predictions
+    # 12) Save predictions
     preds_output = trainer.predict(test_ds)
     preds = np.squeeze(preds_output.predictions).astype(float)
 
+    if normalize_labels:
+        preds = denormalize_scores(preds, score_min, score_max)
+
     pred_df = pd.DataFrame({
-        "gold": target_test_df[label_col].astype(float).values,
+        "gold": target_test_df_raw[label_col].astype(float).values,
         "pred": preds
     })
 
     pred_df.to_csv(os.path.join(output_dir, "test_predictions.csv"), index=False)
 
     with open(os.path.join(output_dir, "dev_metrics.json"), "w") as f:
-        json.dump(dev_metrics, f, indent=2)
+      json.dump(dev_metrics, f, indent=2)
 
     with open(os.path.join(output_dir, "test_metrics.json"), "w") as f:
-        json.dump(test_metrics, f, indent=2)
+      json.dump(test_metrics, f, indent=2)
 
     print("\nDev metrics:")
     for k, v in dev_metrics.items():
@@ -292,12 +330,11 @@ def run_few_shot_transfer(
     for k, v in test_metrics.items():
         print(f"{k}: {v}")
 
-    return dev_metrics, test_metrics, few_shot_df
+    return dev_metrics, test_metrics, few_shot_df_raw
 
 
-# =========================================================
-# Score ranges
-# =========================================================
+# Change the score range to match the transfer target.
+
 FCE_VALID_SCORES = np.array([
     0.0, 1.0, 4.0, 7.0, 9.0, 10.0, 11.0, 11.5,
     12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0
@@ -306,66 +343,105 @@ FCE_VALID_SCORES = np.array([
 IELTS_VALID_SCORES = np.arange(1.0, 9.5, 0.5)
 
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Few-shot cross-dataset transfer for AES regression."
+        description="Run few-shot cross-dataset transfer for AES."
     )
 
-    parser.add_argument("--source_checkpoint", type=str, required=True,
-                        help="Checkpoint fine-tuned on the source dataset.")
-    parser.add_argument("--target_train_csv", type=str, required=True,
-                        help="Target training CSV.")
-    parser.add_argument("--target_dev_csv", type=str, required=True,
-                        help="Target development CSV.")
-    parser.add_argument("--target_test_csv", type=str, required=True,
-                        help="Target test CSV.")
-    parser.add_argument("--output_dir", type=str, required=True,
-                        help="Directory to save transfer outputs.")
+    parser.add_argument(
+        "--source_checkpoint",
+        type=str,
+        default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/runs/Fine-tuning/IELTS/ielts_bert",
+        help="Path to the model fine-tuned on the source dataset.",
+    )
 
-    parser.add_argument("--text_col", type=str, required=True,
-                        help="Text column name of the target dataset.")
-    parser.add_argument("--label_col", type=str, required=True,
-                        help="Label column name of the target dataset.")
+    parser.add_argument(
+        "--target_train_csv",
+        type=str,
+        default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/train.csv",
+        help="Path to the target train CSV.",
+    )
+    parser.add_argument(
+        "--target_dev_csv",
+        type=str,
+        default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/dev.csv",
+        help="Path to the target dev CSV.",
+    )
+    parser.add_argument(
+        "--target_test_csv",
+        type=str,
+        default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/test.csv",
+        help="Path to the target test CSV.",
+    )
 
-    parser.add_argument("--target_score_type", type=str, required=True,
-                        choices=["ielts", "fce", "none"],
-                        help="Valid score set used for QWK on the target dataset.")
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/runs/Transfer/IELTS->FCE/base/BERT_50",
+        help="Directory where outputs, metrics, and predictions will be saved.",
+    )
 
-    parser.add_argument("--tokenizer_name", type=str, default=None,
-                        help="Fallback tokenizer name if tokenizer cannot be loaded from checkpoint.")
+    parser.add_argument("--text_col", type=str, default="text")
+    parser.add_argument("--label_col", type=str, default="mapped_score")
+    parser.add_argument("--n_shot", type=int, default=50)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max_length", type=int, default=512)
+    parser.add_argument("--num_train_epochs", type=int, default=5)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--train_batch_size", type=int, default=8)
+    parser.add_argument("--eval_batch_size", type=int, default=16)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
 
-    parser.add_argument("--n_shot", type=int, default=50,
-                        help="Number of few-shot target training examples.")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed.")
-    parser.add_argument("--max_length", type=int, default=512,
-                        help="Maximum sequence length.")
-    parser.add_argument("--num_train_epochs", type=int, default=5,
-                        help="Number of training epochs.")
-    parser.add_argument("--learning_rate", type=float, default=2e-5,
-                        help="Learning rate.")
-    parser.add_argument("--train_batch_size", type=int, default=8,
-                        help="Per-device training batch size.")
-    parser.add_argument("--eval_batch_size", type=int, default=16,
-                        help="Per-device evaluation batch size.")
-    parser.add_argument("--weight_decay", type=float, default=0.01,
-                        help="Weight decay.")
+    parser.add_argument(
+        "--target_valid_scores",
+        type=str,
+        choices=["fce", "ielts", "none"],
+        default="fce",
+        help="Valid score set used for QWK snapping.",
+    )
+
+    parser.set_defaults(normalize_labels=True)
+    parser.add_argument(
+        "--normalize_labels",
+        dest="normalize_labels",
+        action="store_true",
+        help="Normalize target labels before training.",
+    )
+    parser.add_argument(
+        "--no_normalize_labels",
+        dest="normalize_labels",
+        action="store_false",
+        help="Do not normalize target labels before training.",
+    )
+
+    parser.add_argument("--score_min", type=float, default=0.0)
+    parser.add_argument("--score_max", type=float, default=20.0)
+
+    parser.add_argument(
+        "--tokenizer_name",
+        type=str,
+        default=None,
+        help="Tokenizer name to use if tokenizer cannot be loaded from source_checkpoint.",
+    )
 
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
+def get_valid_scores(name):
+    if name == "fce":
+        return FCE_VALID_SCORES
+    if name == "ielts":
+        return IELTS_VALID_SCORES
+    return None
 
-    if args.target_score_type == "ielts":
-        target_valid_scores = IELTS_VALID_SCORES
-    elif args.target_score_type == "fce":
-        target_valid_scores = FCE_VALID_SCORES
-    else:
-        target_valid_scores = None
+
+if __name__ == "__main__":
+    args = parse_args()
 
     dev, test, fewshot = run_few_shot_transfer(
         source_checkpoint=args.source_checkpoint,
+
         target_train_csv=args.target_train_csv,
         target_dev_csv=args.target_dev_csv,
         target_test_csv=args.target_test_csv,
@@ -380,12 +456,11 @@ def main():
         train_batch_size=args.train_batch_size,
         eval_batch_size=args.eval_batch_size,
         weight_decay=args.weight_decay,
-        target_valid_scores=target_valid_scores,
+
+        target_valid_scores=get_valid_scores(args.target_valid_scores),
+        normalize_labels=args.normalize_labels,
+        score_min=args.score_min,
+        score_max=args.score_max,
+
         tokenizer_name=args.tokenizer_name,
     )
-
-    print("\nFinished transfer run.")
-
-
-if __name__ == "__main__":
-    main()
