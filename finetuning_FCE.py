@@ -1,9 +1,9 @@
 import os
 import math
-import json
-import argparse
 import numpy as np
 import pandas as pd
+import json
+import argparse
 
 from datasets import Dataset
 from scipy.stats import pearsonr, spearmanr
@@ -31,6 +31,20 @@ def load_dataset_csv(path):
     return pd.read_csv(path)
 
 # -----------------------------
+# FCE score normalization
+# -----------------------------
+FCE_MIN_SCORE = 0.0
+FCE_MAX_SCORE = 20.0
+
+def normalize_fce_score(values):
+    values = np.asarray(values, dtype=float)
+    return (values - FCE_MIN_SCORE) / (FCE_MAX_SCORE - FCE_MIN_SCORE)
+
+def denormalize_fce_score(values):
+    values = np.asarray(values, dtype=float)
+    return values * (FCE_MAX_SCORE - FCE_MIN_SCORE) + FCE_MIN_SCORE
+
+# -----------------------------
 # Load model + tokenizer
 # -----------------------------
 def load_from_pretrained(
@@ -38,6 +52,7 @@ def load_from_pretrained(
     model_name="bert-base-uncased",
     num_labels=1,
 ):
+
     """ Replace with
 
         google-bert/bert-base-uncased
@@ -45,8 +60,7 @@ def load_from_pretrained(
         microsoft/deberta-v3-base
         distilbert/distilbert-base-uncased
 
-        for other baselines
-    """
+        for other baselines"""
 
     model_source = checkpoint_path if checkpoint_path is not None else model_name
 
@@ -66,6 +80,10 @@ def load_from_pretrained(
 def build_hf_dataset(df, text_col="text", label_col="mapped_score"):
     df = df[[text_col, label_col]].dropna().copy()
     df[label_col] = df[label_col].astype(float)
+
+    # Normalize FCE scores from raw 0.0–20.0 scale to 0.0–1.0 scale
+    df[label_col] = normalize_fce_score(df[label_col])
+
     return Dataset.from_pandas(df, preserve_index=False)
 
 # -----------------------------
@@ -129,11 +147,16 @@ def fce_score_to_class(values):
     values = np.asarray(values, dtype=float)
     return np.array([FCE_SCORE_TO_CLASS[v] for v in values], dtype=int)
 
+
 def compute_metrics(eval_pred):
     preds, labels = eval_pred
 
     preds = np.squeeze(preds).astype(float)
     labels = np.squeeze(labels).astype(float)
+
+    # Convert normalized predictions and labels back to raw FCE scale
+    preds = denormalize_fce_score(preds)
+    labels = denormalize_fce_score(labels)
 
     rmse = math.sqrt(mean_squared_error(labels, preds))
     pearson = pearsonr(labels, preds)[0]
@@ -211,23 +234,24 @@ def run_experiment(
         disable_tqdm=True,
     )
 
-    class ModernSaveTrainer(Trainer):  # For loading BERT in the modern format with weight and bias instead of gamma and beta
-        def _save(self, output_dir=None, state_dict=None):
-            output_dir = output_dir if output_dir is not None else self.args.output_dir
-            os.makedirs(output_dir, exist_ok=True)
+    class ModernSaveTrainer(Trainer): #For loading BERT in the modern format with weight and bias instead of gamma and beta
+      def _save(self, output_dir=None, state_dict=None):
+          output_dir = output_dir if output_dir is not None else self.args.output_dir
+          os.makedirs(output_dir, exist_ok=True)
 
-            model_to_save = self.model
-            if hasattr(self, "accelerator"):
-                model_to_save = self.accelerator.unwrap_model(self.model)
+          model_to_save = self.model
+          if hasattr(self, "accelerator"):
+              model_to_save = self.accelerator.unwrap_model(self.model)
 
-            model_to_save.save_pretrained(
-                output_dir,
-                state_dict=state_dict,
-                save_original_format=False,
-            )
+          model_to_save.save_pretrained(
+              output_dir,
+              state_dict=state_dict,
+              save_original_format=False,
+          )
 
-            if self.processing_class is not None:
-                self.processing_class.save_pretrained(output_dir)
+          if self.processing_class is not None:
+              self.processing_class.save_pretrained(output_dir)
+
 
     trainer = ModernSaveTrainer(
         model=model,
@@ -238,6 +262,7 @@ def run_experiment(
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
+
 
     trainer.train()
 
@@ -250,16 +275,18 @@ def run_experiment(
 
     # Test metrics
     test_metrics = trainer.evaluate(test_ds)
-
     with open(os.path.join(output_dir, "dev_metrics.json"), "w") as f:
-        json.dump(dev_metrics, f, indent=2)
+      json.dump(dev_metrics, f, indent=2)
 
     with open(os.path.join(output_dir, "test_metrics.json"), "w") as f:
-        json.dump(test_metrics, f, indent=2)
+      json.dump(test_metrics, f, indent=2)
 
     # Save predictions
     preds_output = trainer.predict(test_ds)
     preds = np.squeeze(preds_output.predictions)
+
+    # Convert normalized predictions back to raw FCE scale
+    preds = denormalize_fce_score(preds)
 
     pred_df = pd.DataFrame({
         "gold": test_df[label_col].astype(float).values,
@@ -269,46 +296,45 @@ def run_experiment(
 
     return dev_metrics, test_metrics
 
-# -----------------------------
-# Argument parsing
-# -----------------------------
 def parse_args():
-    parser = argparse.ArgumentParser(description="Fine-tune a sequence classification model for FCE AES regression.")
+    parser = argparse.ArgumentParser(description="Fine-tune/evaluate a sequence-regression model on FCE.")
 
-    parser.add_argument("--train_csv", type=str, required=True, help="Path to training CSV file.")
-    parser.add_argument("--dev_csv", type=str, required=True, help="Path to development CSV file.")
-    parser.add_argument("--test_csv", type=str, required=True, help="Path to test CSV file.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save outputs.")
+    parser.add_argument("--checkpoint_path", type=str, default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/DAPT_checkpoints/B2-C1-BERT-efcamdat/checkpoint-733")
+    parser.add_argument("--model_name", type=str, default="bert-base-uncased")
 
-    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to pretrained checkpoint.")
-    parser.add_argument("--model_name", type=str, default="bert-base-uncased", help="Base tokenizer/model name.")
+    parser.add_argument("--train_csv", type=str, default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/train.csv")
+    parser.add_argument("--dev_csv", type=str, default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/dev.csv")
+    parser.add_argument("--test_csv", type=str, default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/Datasets/Downstream/processed/FCE_processed/test.csv")
+    parser.add_argument("--output_dir", type=str, default="/content/drive/MyDrive/DAPT_BERT_EFCAMDAT/runs/Ablation/fce_b2c1")
 
-    parser.add_argument("--text_col", type=str, default="text", help="Name of text column.")
-    parser.add_argument("--label_col", type=str, default="mapped_score", help="Name of label column.")
-    parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length.")
-
-    parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate.")
-    parser.add_argument("--train_batch_size", type=int, default=8, help="Per-device train batch size.")
-    parser.add_argument("--eval_batch_size", type=int, default=16, help="Per-device eval batch size.")
-    parser.add_argument("--num_train_epochs", type=int, default=5, help="Number of training epochs.")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument("--text_col", type=str, default="text")
+    parser.add_argument("--label_col", type=str, default="mapped_score")
+    parser.add_argument("--max_length", type=int, default=512)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--train_batch_size", type=int, default=8)
+    parser.add_argument("--eval_batch_size", type=int, default=16)
+    parser.add_argument("--num_train_epochs", type=float, default=5)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--seed", type=int, default=42)
 
     return parser.parse_args()
 
-def main():
+
+if __name__ == "__main__":
     args = parse_args()
 
-    train_df = load_dataset_csv(args.train_csv)
-    dev_df = load_dataset_csv(args.dev_csv)
-    test_df = load_dataset_csv(args.test_csv)
+    checkpoint_path = args.checkpoint_path if args.checkpoint_path not in (None, "", "None") else None
 
-    dev_metrics, test_metrics = run_experiment(
-        train_df=train_df,
-        dev_df=dev_df,
-        test_df=test_df,
+    train = load_dataset_csv(args.train_csv)
+    dev = load_dataset_csv(args.dev_csv)
+    test = load_dataset_csv(args.test_csv)
+
+    dev_fce, test_fce = run_experiment(
+        train_df=train,
+        dev_df=dev,
+        test_df=test,
         output_dir=args.output_dir,
-        checkpoint_path=args.checkpoint_path,
+        checkpoint_path=checkpoint_path,
         model_name=args.model_name,
         text_col=args.text_col,
         label_col=args.label_col,
@@ -320,11 +346,3 @@ def main():
         weight_decay=args.weight_decay,
         seed=args.seed,
     )
-
-    print("Dev metrics:")
-    print(json.dumps(dev_metrics, indent=2))
-    print("Test metrics:")
-    print(json.dumps(test_metrics, indent=2))
-
-if __name__ == "__main__":
-    main()
