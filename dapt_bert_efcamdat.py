@@ -1,4 +1,3 @@
-
 import argparse
 import math
 import os
@@ -42,7 +41,8 @@ class DAPTConfig:
 
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
-    warmup_steps: int = 5154
+    warmup_steps: int = 0
+    warmup_ratio: float = 0.06
     lr_scheduler_type: str = "linear"
 
     fp16: bool = True
@@ -206,7 +206,8 @@ def main():
     # Optim
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--warmup_steps", type=int, default=5154)
+    parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--warmup_ratio", type=float, default=0.06)
 
     # Precision
     parser.add_argument("--fp16", action="store_true", help="Enable fp16 (recommended on Colab)")
@@ -246,6 +247,7 @@ def main():
     learning_rate=args.lr,
     weight_decay=args.weight_decay,
     warmup_steps=args.warmup_steps,
+    warmup_ratio=args.warmup_ratio,
     fp16=(False if args.no_fp16 else True if args.fp16 or not args.no_fp16 else False),
     logging_steps=args.logging_steps,
     save_steps=args.save_steps,
@@ -259,6 +261,19 @@ def main():
     max_train_tokens=args.max_train_tokens,
 )
     cfg = auto_precision_flags(cfg)
+
+    # Dynamically compute warmup steps if max_steps is used.
+    # If --warmup_steps is manually provided, it takes priority.
+    if cfg.warmup_steps <= 0:
+        if cfg.max_steps > 0:
+            cfg.warmup_steps = int(cfg.max_steps * cfg.warmup_ratio)
+        else:
+            raise ValueError(
+                "Dynamic warmup requires --max_steps > 0, or manually provide --warmup_steps."
+            )
+
+    print(f"Using warmup_steps={cfg.warmup_steps} "
+          f"({cfg.warmup_ratio*100:.1f}% of max_steps={cfg.max_steps})")
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -393,6 +408,8 @@ def main():
         seed=cfg.seed,
         dataloader_num_workers=2,
         report_to="none",
+
+        disable_tqdm=False,
 )
 
     class ModernSaveTrainer(Trainer): #For loading BERT in the modern format with weight and bias instead of gamma and beta
@@ -423,6 +440,21 @@ def main():
     data_collator=data_collator,
     processing_class=tokenizer,
 )
+    # 8.5) Evaluate BEFORE DAPT training
+    initial_eval_metrics = trainer.evaluate()
+    initial_eval_loss = initial_eval_metrics.get("eval_loss", None)
+
+    if initial_eval_loss is not None and initial_eval_loss < 50:
+        initial_eval_metrics["perplexity"] = float(math.exp(initial_eval_loss))
+
+    print("\n===== Initial MLM Evaluation BEFORE DAPT =====")
+    if initial_eval_loss is not None:
+        ppl = initial_eval_metrics.get("perplexity", None)
+        if ppl is not None:
+            print(f"Initial eval loss: {initial_eval_loss:.4f} | Initial perplexity: {ppl:.2f}")
+        else:
+            print(f"Initial eval loss: {initial_eval_loss:.4f}")
+    print("============================================\n")
 
     # 9) Train (optionally resume)
     resume_ckpt = None
@@ -462,7 +494,8 @@ def main():
             print(f"Eval loss: {eval_loss:.4f}")
     print("========================\n")
 
-# 21019615
+# cap at 8000000
+# n step ablation= 733
 
 if __name__ == "__main__":
     main()
