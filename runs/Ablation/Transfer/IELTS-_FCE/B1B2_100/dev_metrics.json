@@ -1,0 +1,11 @@
+{
+  "dev_loss": 0.014942163601517677,
+  "dev_rmse": 2.444762810189939,
+  "dev_pearson": 0.5497508391171934,
+  "dev_spearman": 0.5007917694395316,
+  "dev_qwk": 0.4304786251952847,
+  "dev_runtime": 2.9167,
+  "dev_samples_per_second": 126.857,
+  "dev_steps_per_second": 8.229,
+  "epoch": 5.0
+}
