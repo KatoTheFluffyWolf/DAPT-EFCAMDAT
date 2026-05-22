@@ -1,0 +1,11 @@
+{
+  "eval_loss": 0.011848973110318184,
+  "eval_rmse": 2.1770597807222547,
+  "eval_pearson": 0.6648896529677099,
+  "eval_spearman": 0.6468676870757673,
+  "eval_qwk": 0.5810116002640711,
+  "eval_runtime": 3.1573,
+  "eval_samples_per_second": 117.82,
+  "eval_steps_per_second": 7.601,
+  "epoch": 5.0
+}
