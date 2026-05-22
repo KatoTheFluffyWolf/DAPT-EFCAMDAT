@@ -1,0 +1,11 @@
+{
+  "test_loss": 0.010568242520093918,
+  "test_rmse": 0.8224156502506119,
+  "test_pearson": 0.6691711245770147,
+  "test_spearman": 0.6663141103028974,
+  "test_qwk": 0.5467071761735633,
+  "test_runtime": 0.8085,
+  "test_samples_per_second": 132.343,
+  "test_steps_per_second": 8.658,
+  "epoch": 5.0
+}
