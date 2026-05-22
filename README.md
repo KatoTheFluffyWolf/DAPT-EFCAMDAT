@@ -1,182 +1,341 @@
-# README
+# DAPT-EFCAMDAT
+
+This repository contains the code, experiment outputs, and result summaries for a study on **learner-domain domain-adaptive continued pretraining (DAPT)** for **automated essay scoring (AES)** on English proficiency test datasets.
+
+The study investigates whether continued pretraining on learner writing from **EFCAMDAT** improves transformer-based AES performance, and whether such adaptation improves cross-test transfer between two English proficiency assessment datasets: **FCE** and **IELTS Task 2**.
 
 ## Overview
-This zip contains the code used in our study on domain-adaptive continued pretraining for automated essay scoring (AES). The project investigates whether continued pretraining on learner writing improves AES performance on English proficiency test datasets, and whether it helps reduce performance degradation under cross-dataset transfer.
 
-The code is organised around three stages:
-1. **Dataset preprocessing** for IELTS, FCE, and EFCAMDAT.
-2. **Continued pretraining (DAPT)** of BERT on learner writing from EFCAMDAT.
-3. **Downstream AES experiments**, including in-domain fine-tuning and cross-dataset few-shot transfer.
+This repository supports a study on whether **learner-domain domain-adaptive continued pretraining (DAPT)** improves **automated essay scoring (AES)** on English proficiency test datasets.
 
-## Important note on data availability
-The raw datasets are **not included** in this zip. This is intentional because some datasets used in the study have redistribution restrictions. To reproduce the experiments, users should obtain the datasets from their original sources and then run the preprocessing scripts provided here.
+The study first performs DAPT on three transformer encoders, **BERT**, **RoBERTa**, and **DistilBERT**, using the **EFCAMDAT** learner corpus. The adapted models are then evaluated through two main experiments:
 
----
+1. **Baseline comparison**  
+   The domain-adapted models are fine-tuned and evaluated separately on **FCE** and **IELTS Task 2**, then compared against their corresponding non-adapted base checkpoints.
 
-## Folder structure
+2. **Cross-dataset transfer**  
+   Models are first fine-tuned on one English proficiency test dataset, then adapted to the other dataset under few-shot settings using 50, 100, and 200 target training samples.
+
+Because full-corpus DAPT produced mixed results, the study further investigates whether these outcomes are related to corpus alignment. This is done through:
+
+3. **Vocabulary distribution analysis**  
+   Jensen-Shannon divergence is used to compare lexical distributions between EFCAMDAT proficiency subsets and the downstream AES datasets.
+
+4. **Syntactic complexity analysis**  
+   NeoSCA is used to compare syntactic complexity profiles across EFCAMDAT, FCE, and IELTS.
+
+5. **Proficiency-based ablation**  
+   BERT is further pretrained on selected CEFR-based EFCAMDAT subsets, such as A1–A2, B1–B2, and B2–C1, to test whether better-aligned pretraining data improves downstream AES performance.
+
+Overall, the repository includes code for preprocessing, DAPT, downstream fine-tuning, cross-dataset transfer, alignment analysis, ablation experiments, and saved experiment outputs.
+
+## Repository structure
 
 ```text
-code_submission/
-├── cross-dataset-transfer.py
-├── dapt_bert_efcamdat.py
-├── finetuning_FCE.py
-├── finetuning_IELTS.py
-├── requirements.txt
+DAPT-EFCAMDAT/
+├── analysis/
+│   ├── JSD.py
+│   ├── syntactic_complexity.py
+│   └── top-k_tokens.py
+│
 ├── preprocessing/
 │   ├── EFCAMDAT_split.py
 │   ├── FCE_preprocessing.py
 │   └── IELTS_preprocessing.py
+│
 ├── results/
 │   ├── Ablation.xlsx
+│   ├── Analysis.xlsx
 │   ├── Baseline Comparison.xlsx
-│   └── Cross-dataset Transfer.xlsx
-└── runs/
-    ├── Ablation/
-    │   ├── fce_A1A2/
-    │   ├── fce_B1B2C1/
-    │   ├── ielts_A1A2/
-    │   └── ielts_B1B2C1/
-    ├── Baseline Comparison/
-    │   ├── fce_bert/
-    │   ├── fce_dapt_bert/
-    │   ├── fce_distilbert/
-    │   ├── fce_roberta/
-    │   ├── ielts_bert/
-    │   ├── ielts_dapt_bert/
-    │   ├── ielts_distilbert/
-    │   └── ielts_roberta/
-    └── Cross-dataset Transfer/
-        ├── FCE to IELTS/
-        │   ├── bert/
-        │   └── dapt-bert/
-        └── IELTS to FCE/
-            ├── bert/
-            └── dapt-bert/
+│   ├── Cross-test transferability.xlsx
+│   ├── jsd_fce_efcamdat.xlsx
+│   └── jsd_ielts_efcamdat.xlsx
+│
+├── runs/
+│   ├── Ablation/
+│   ├── Downstream Fine-tuning/
+│   └── Transfer/
+│
+├── cross-dataset-transfer.py
+├── dapt_bert_efcamdat.py
+├── finetuning_FCE.py
+├── finetuning_IELTS.py
+├── manuscript.pdf
+├── requirements.txt
+└── README.md
 ```
 
-**Note:** Each specific run in the "runs" folder contains two files: test-predictions and test-metrics. Test metrics contains the evaluation metrics reported in the paper, while test predictions comprises the raw prediction on the test set that was used to compute the metrics.
+## Main scripts
 
----
+### `dapt_bert_efcamdat.py`
 
-## File descriptions
+Runs domain-adaptive continued pretraining on EFCAMDAT using a masked language modelling objective.
 
-### 1. `cross-dataset-transfer.py`
-This script runs the **cross-dataset transfer experiment**. It loads a checkpoint that was already fine-tuned on a **source dataset**, resets the regression head, samples a **few-shot subset** from the **target training set**, fine-tunes on that subset, and evaluates on the target development and test sets. It reports RMSE, Pearson, Spearman, and optionally QWK depending on the target score set, and saves predictions and metrics as output files.
+The script supports:
 
-Use this script for experiments such as:
-- source = IELTS, target = FCE
-- source = FCE, target = IELTS
-
-### 2. `dapt_bert_efcamdat.py`
-This script performs **domain-adaptive pretraining (DAPT)** of BERT using a masked language modeling (MLM) objective on the cleaned EFCAMDAT corpus. It follows the setup described in this study by Stearns et al. (2024)
-
-Bernardo Stearns, Nicolas Ballier, Thomas Gaillat, Andrew Simpkin, and John P. McCrae. 2024. Evaluating the Generalisation of an Artificial Learner. In Proceedings of the 13th Workshop on Natural Language Processing for Computer Assisted Language Learning, pages 199–208, Rennes, France. LiU Electronic Press.
-
-The pretraining setup includes:
-- BERT base as the starting checkpoint
-- maximum sequence length filtering
+- BERT-style masked language modelling
 - 15% masking probability
-- train/eval split
+- maximum WordPiece sequence filtering
+- train/evaluation split
 - optional deduplication
-- optional token-budget capping for ablation settings
+- token-budget capping for controlled ablation experiments
+- checkpoint saving and evaluation during training
 
-The script saves intermediate checkpoints and the final domain-adapted model. This is the script used to produce the domain-adapted checkpoints before downstream AES fine-tuning.
+Example:
 
-### 3. `finetuning_FCE.py`
-This script fine-tunes a transformer model for **AES regression on the FCE dataset**. It loads the processed train/dev/test CSV files, tokenizes the essays, fine-tunes the model, evaluates on development and test sets, and saves predictions and metrics.
+```bash
+python dapt_bert_efcamdat.py \
+  --xlsx path/to/efcamdat.xlsx \
+  --text_col text \
+  --out outputs/dapt_bert_efcamdat \
+  --model bert-base-uncased \
+  --max_len 512 \
+  --mlm_prob 0.15 \
+  --epochs 1 \
+  --train_bs 4 \
+  --eval_bs 8 \
+  --grad_acc 16 \
+  --lr 5e-5 \
+  --warmup_ratio 0.06 \
+  --fp16
+```
 
-It uses the FCE score mapping and computes:
-- RMSE
-- Pearson correlation
-- Spearman correlation
-- Quadratic Weighted Kappa (QWK)
+### `finetuning_FCE.py`
 
-This script can be used with either:
-- a general-domain base checkpoint such as `bert-base-uncased`, or
-- a domain-adapted checkpoint produced by `dapt_bert_efcamdat.py`
+Fine-tunes a transformer encoder for AES regression on the FCE dataset.
 
-### 4. `finetuning_IELTS.py`
-This script fine-tunes a transformer model for **AES regression on the IELTS dataset**. It is the IELTS counterpart to `finetuning_FCE.py`. It loads processed train/dev/test CSV files, fine-tunes the model, evaluates performance, and saves predictions and metrics.
+The script:
 
-It computes:
-- RMSE
-- Pearson correlation
-- Spearman correlation
-- Quadratic Weighted Kappa (QWK)
+- loads processed FCE train/dev/test files
+- normalises FCE scores
+- fine-tunes a sequence classification model with a regression head
+- computes RMSE, Pearson, Spearman, and Quadratic Weighted Kappa
+- saves test metrics and predictions
 
-Like the FCE script, it supports both general-domain checkpoints and DAPT checkpoints.
+It can be used with either a base transformer checkpoint or a DAPT checkpoint.
 
-### 5. `requirements.txt`
-This file lists the Python package versions used in the environment for the experiments. It is included to help reproduce the software setup as closely as possible.
+### `finetuning_IELTS.py`
 
----
+Fine-tunes a transformer encoder for AES regression on the IELTS Task 2 dataset.
 
-## Folder descriptions
+The script:
 
-### `preprocessing/`
-This folder contains the dataset preparation scripts used before training.
+- loads processed IELTS train/dev/test files
+- normalises IELTS scores
+- fine-tunes a regression model
+- computes RMSE, Pearson, Spearman, and Quadratic Weighted Kappa
+- saves test metrics and predictions
 
-#### `preprocessing/EFCAMDAT_split.py`
-This script merges the two excel files of the EFCAMDAT corpus, filters rows with valid text and CEFR labels, and splits the corpus by proficiency level. In its current form, it creates:
-- `A1_A2.xlsx`
-- `B1_B2.xlsx`
-- `C1.xlsx`
-- `split_summary.csv`
+It can be used with either a base transformer checkpoint or a DAPT checkpoint.
 
-It also counts BERT tokens for each split, which is useful for reporting corpus size and for constructing token-controlled ablation studies.
+### `cross-dataset-transfer.py`
 
-#### `preprocessing/FCE_preprocessing.py`
-This script parses the raw **FCE XML files**, reconstructs the learner text from the error-annotated XML, maps the original FCE holistic score labels to the numerical scale used in the study, removes duplicates, and creates **train/dev/test CSV splits**. It uses **group-based splitting by script ID** to reduce leakage between splits.
+Runs few-shot cross-dataset transfer experiments.
 
-#### `preprocessing/IELTS_preprocessing.py`
-This script preprocesses the raw IELTS CSV data. It removes missing values and duplicates, drops unused columns, filters invalid scores, removes ultra-short essays, cleans non-English characters, filters to the selected task type, and then creates **train/dev/test CSV splits**.
+The script:
 
-This script is intended to produce the processed IELTS files used by `finetuning_IELTS.py`.
+- loads a model checkpoint fine-tuned on a source dataset
+- samples a small target-domain training subset
+- fine-tunes on the target few-shot subset
+- evaluates on the target development and test sets
+- saves metrics and predictions
 
-### `runs/`
-This folder contains the saved **test set outputs** for the experiments reported in the paper. Each run directory contains two files:
-- `test_metrics.json`: the evaluation metrics for that run
-- `test_predictions.csv`: the raw test predictions used to compute the reported results
+This is used for both transfer directions:
 
-The folder is organised by experiment type:
-- `runs/Baseline Comparison/` for in-domain baseline comparison runs on IELTS and FCE.
-- `runs/Cross-dataset Transfer/` for few-shot cross-dataset transfer in both directions (IELTS→FCE and FCE→IELTS).
-- `runs/Ablation/` for the EFCAMDAT subset ablation runs (A1–A2 only, B1–B2–C1 only) on IELTS and FCE.
+- IELTS → FCE
+- FCE → IELTS
 
-### `results/`
-This folder contains spreadsheet summaries of the main reported results:
-- `Baseline Comparison.xlsx`
-- `Cross-dataset Transfer.xlsx`
-- `Ablation.xlsx`
+## Analysis scripts
 
-These files are included for convenience and present the reported results in table form.
+### `analysis/JSD.py`
 
----
+Computes Jensen-Shannon divergence between vocabulary distributions.
 
-## Typical workflow
-A typical reproduction workflow is:
+This is used to examine lexical alignment between EFCAMDAT proficiency subsets and the downstream AES datasets.
+
+### `analysis/top-k_tokens.py`
+
+Extracts the most frequent tokens from selected corpora.
+
+This provides a qualitative view of lexical distribution differences between EFCAMDAT, FCE, and IELTS.
+
+### `analysis/syntactic_complexity.py`
+
+Computes syntactic complexity features for corpus comparison.
+
+This is used to examine whether EFCAMDAT proficiency subsets are syntactically closer to FCE or IELTS.
+
+## Preprocessing scripts
+
+### `preprocessing/EFCAMDAT_split.py`
+
+Processes and splits the EFCAMDAT corpus by CEFR proficiency level.
+
+The resulting proficiency subsets are used for full-corpus DAPT and proficiency-based ablation experiments.
+
+### `preprocessing/FCE_preprocessing.py`
+
+Processes the FCE dataset by extracting learner text, mapping holistic scores to the numerical scale used in the study, removing duplicates, and creating train/dev/test splits.
+
+### `preprocessing/IELTS_preprocessing.py`
+
+Processes the IELTS writing dataset by cleaning essays, filtering unsuitable examples, selecting IELTS Task 2 essays, and creating train/dev/test splits.
+
+## Results folder
+
+The `results/` folder contains spreadsheet summaries of the main reported results and corpus-alignment analyses.
+
+It includes:
+
+- `Baseline Comparison.xlsx`: summary of in-domain AES fine-tuning results.
+- `Cross-test transferability.xlsx`: summary of few-shot cross-dataset transfer results.
+- `Ablation.xlsx`: summary of proficiency-based DAPT ablation results.
+- `Analysis.xlsx`: additional analysis summary tables.
+- `jsd_fce_efcamdat.xlsx`: Jensen-Shannon divergence results comparing FCE and EFCAMDAT variants.
+- `jsd_ielts_efcamdat.xlsx`: Jensen-Shannon divergence results comparing IELTS and EFCAMDAT variants.
+
+These spreadsheets are included for convenience and present the reported results in table form.
+
+## Experiment outputs
+
+The `runs/` directory contains saved outputs from the experiments reported in the study.
+
+Each run folder typically contains files such as:
+
+```text
+test_metrics.json
+test_predictions.csv
+```
+
+`test_metrics.json` contains the evaluation metrics for the run, while `test_predictions.csv` contains the gold scores and model predictions used to compute the reported results.
+
+### `runs/Downstream Fine-tuning/`
+
+Contains in-domain AES fine-tuning outputs for FCE and IELTS.
+
+These runs correspond to the baseline comparison experiment, where each DAPT model is compared against its corresponding non-adapted base model.
+
+### `runs/Transfer/`
+
+Contains few-shot cross-dataset transfer outputs for:
+
+- IELTS → FCE
+- FCE → IELTS
+
+These runs correspond to the cross-dataset transfer experiment.
+
+### `runs/Ablation/`
+
+Contains outputs for proficiency-based DAPT ablation experiments.
+
+The ablation experiments compare DAPT variants trained on different EFCAMDAT proficiency subsets, such as:
+
+- A1–A2
+- B1–B2
+- B2–C1
+
+The ablation outputs include both downstream fine-tuning and cross-dataset transfer results.
+
+## Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/KatoTheFluffyWolf/DAPT-EFCAMDAT.git
+cd DAPT-EFCAMDAT
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Using a virtual environment is recommended:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+On Windows:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Data availability
+
+The raw datasets are not included in this repository because some of them have redistribution restrictions.
+
+To reproduce the experiments, users should obtain the datasets from their original sources and then run the preprocessing scripts in `preprocessing/`.
+
+Datasets used in the study include:
+
+- EFCAMDAT learner corpus
+- Cambridge Learner Corpus FCE dataset
+- IELTS Writing Scored Essays dataset
+
+After preprocessing, the expected workflow is to create train/dev/test files for the downstream AES experiments and EFCAMDAT proficiency subsets for DAPT.
+
+## Typical reproduction workflow
+
+A typical workflow is:
 
 1. Obtain the raw datasets from their original sources.
-2. Run the preprocessing scripts in `preprocessing/` to prepare train/dev/test files.
-3. Run `dapt_bert_efcamdat.py` to create domain-adapted BERT checkpoints on EFCAMDAT.
-4. Run `finetuning_FCE.py` and `finetuning_IELTS.py` to fine-tune models on the FCE and IELTS datasets, respectively. These scripts can be used for both the domain-adapted checkpoint and the baseline models.
-5. Run `cross-dataset-transfer.py` for the few-shot cross-dataset transfer experiments.
+2. Run the preprocessing scripts in `preprocessing/`.
+3. Run `dapt_bert_efcamdat.py` to create full-corpus EFCAMDAT DAPT checkpoints.
+4. Run `finetuning_FCE.py` and `finetuning_IELTS.py` to perform the baseline comparison experiment.
+5. Run `cross-dataset-transfer.py` to perform few-shot cross-dataset transfer experiments.
+6. Run the scripts in `analysis/` to compute vocabulary distribution and syntactic complexity analyses.
+7. Run proficiency-based DAPT variants for the ablation study.
+8. Inspect `results/` for spreadsheet summaries of the reported results.
+9. Inspect `runs/` for saved metrics and prediction files from individual runs.
 
----
+## Evaluation metrics
 
-## Reproducibility notes
-- Random seeds are set in the training scripts for more stable reproduction.
-- The scripts save metrics and predictions to disk so results can be inspected after each run.
-- The raw datasets are not redistributed in this package; users must obtain them from the corresponding provider.
+The experiments report:
 
-For the EFCAMDAT corpus, please refer to: https://ef-lab.mmll.cam.ac.uk/EFCAMDAT.html
-For the CLC FCE dataset: https://ilexir.co.uk/datasets/index.html
-For the IELTS writings scored essays dataset: https://www.kaggle.com/datasets/mazlumi/ielts-writing-scored-essays-dataset/
+- RMSE: Root Mean Squared Error
+- Pearson correlation
+- Spearman correlation
+- Quadratic Weighted Kappa
 
+RMSE is treated as the primary metric for model selection and interpretation, while Pearson, Spearman, and QWK are reported for comparability with prior AES studies.
 
----
+Predictions are saved so that reported metrics can be inspected or recomputed.
 
 ## Notes for reviewers
-This package is intended to make the experimental pipeline transparent and reproducible without redistributing restricted datasets. The code covers the main stages of the study: preprocessing, domain-adaptive pretraining, fine-tuning on downstream datasets for AES, and cross-dataset transfer evaluation.
 
-In addition to the code, the package includes the saved test metrics and prediction files corresponding to the reported experiments under `runs/`, as well as spreadsheet summaries of the main results under `results/`.
+This repository is intended to support transparency and reproducibility without redistributing restricted datasets.
+
+The code covers the main experimental pipeline:
+
+- dataset preprocessing
+- learner-domain DAPT
+- downstream AES fine-tuning
+- few-shot cross-dataset transfer
+- proficiency-based ablation
+- lexical and syntactic alignment analyses
+
+The `runs/` folder contains saved metric and prediction files for individual experiments, while the `results/` folder contains spreadsheet summaries of the main reported results and analyses.
+
+## Citation
+
+If you use this repository, please cite the accompanying manuscript.
+
+```bibtex
+@misc{dapt_efcamdat_aes,
+  title        = {Does Continued Pretraining on a Learner Corpus Improve Automated Essay Scoring on English Proficiency Tests? Evidence from EFCAMDAT},
+  author       = {Nguyen, D. Anh},
+  year         = {2026},
+  note         = {Code repository for DAPT-EFCAMDAT AES experiments}
+}
+```
+
+## License
+
+No license has been specified yet. Please contact the author before reusing or redistributing the code.
