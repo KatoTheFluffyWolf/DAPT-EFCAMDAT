@@ -338,4 +338,6 @@ If you use this repository, please cite the accompanying manuscript.
 
 ## License
 
-No license has been specified yet. Please contact the author before reusing or redistributing the code.
+The code in this repository is released under the MIT License. See the `LICENSE` file for details.
+
+This license applies only to the code in this repository. It does not apply to the datasets, trained model checkpoints, or any text-derived artifacts from EFCAMDAT, IELTS, or FCE. These resources are governed by their respective original licenses and access conditions.
