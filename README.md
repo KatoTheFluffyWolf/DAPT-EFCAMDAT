@@ -328,11 +328,14 @@ The `runs/` folder contains saved metric and prediction files for individual exp
 If you use this repository, please cite the accompanying manuscript.
 
 ```bibtex
-@misc{dapt_efcamdat_aes,
-  title        = {Does Continued Pretraining on a Learner Corpus Improve Automated Essay Scoring on English Proficiency Tests? Evidence from EFCAMDAT},
-  author       = {Nguyen, D. Anh},
-  year         = {2026},
-  note         = {Code repository for DAPT-EFCAMDAT AES experiments}
+@misc{nguyen2026doescontinuedpretraininglearner,
+title={Does Continued Pretraining on a Learner Corpus Improve Automated Essay Scoring on English Proficiency Tests? Evidence from EFCAMDAT},
+author={Duy Anh Nguyen},
+year={2026},
+eprint={2605.25924},
+archivePrefix={arXiv},
+primaryClass={cs.CL},
+url={https://arxiv.org/abs/2605.25924}
 }
 ```
 
