@@ -308,21 +308,6 @@ RMSE is treated as the primary metric for model selection and interpretation, wh
 
 Predictions are saved so that reported metrics can be inspected or recomputed.
 
-## Notes for reviewers
-
-This repository is intended to support transparency and reproducibility without redistributing restricted datasets.
-
-The code covers the main experimental pipeline:
-
-- dataset preprocessing
-- learner-domain DAPT
-- downstream AES fine-tuning
-- few-shot cross-dataset transfer
-- proficiency-based ablation
-- lexical and syntactic alignment analyses
-
-The `runs/` folder contains saved metric and prediction files for individual experiments, while the `results/` folder contains spreadsheet summaries of the main reported results and analyses.
-
 ## Citation
 
 If you use this repository, please cite the accompanying manuscript.
