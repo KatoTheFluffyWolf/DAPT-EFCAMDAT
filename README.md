@@ -25,7 +25,7 @@ Because full-corpus DAPT produced mixed results, the study further investigates 
    NeoSCA is used to compare syntactic complexity profiles across EFCAMDAT, FCE, and IELTS.
 
 5. **Proficiency-based ablation**  
-   BERT is further pretrained on selected CEFR-based EFCAMDAT subsets, such as A1–A2, B1–B2, and B2–C1, to test whether better-aligned pretraining data improves downstream AES performance.
+   BERT, RoBERTa, and DistilBERT is further pretrained on selected CEFR-based EFCAMDAT subsets, such as A1–A2, B1–B2, and B2–C1, to test whether better-aligned pretraining data improves downstream AES performance.
 
 Overall, the repository includes code for preprocessing, DAPT, downstream fine-tuning, cross-dataset transfer, alignment analysis, ablation experiments, and saved experiment outputs.
 
